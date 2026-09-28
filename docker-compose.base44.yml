@@ -1,0 +1,73 @@
+services:
+  web:
+    image: node:22
+    working_dir: /app
+    volumes:
+      - .:/app
+      - node_modules:/app/node_modules
+    environment:
+      __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS: ${__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS:-}
+      HERMES_DASHBOARD_URL: http://127.0.0.1:9119
+      CHOKIDAR_USEPOLLING: "true"
+    command: >-
+      sh -c 'if [ ! -d node_modules/@hermes/ink ]; then npm ci --workspace web --workspace ui-tui --workspace ui-tui/packages/hermes-ink --include-workspace-root=false; fi;
+      npm run dev --workspace web -- --host 0.0.0.0 --port 5173'
+    ports:
+      - "3000:5173"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:5173/').then(r => {if (!r.ok) process.exit(1)}).catch(() => process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 180s
+    restart: on-failure
+
+  node_runtime:
+    image: node:22
+    volumes:
+      - node_runtime:/opt/node-runtime
+    command: >-
+      sh -c 'mkdir -p /opt/node-runtime/bin /opt/node-runtime/lib;
+      cp /usr/local/bin/node /opt/node-runtime/bin/node;
+      cp -a /usr/local/lib/node_modules/npm /opt/node-runtime/lib/npm;
+      ln -sf ../lib/npm/bin/npm-cli.js /opt/node-runtime/bin/npm'
+
+  backend:
+    image: python:3.14-slim
+    working_dir: /app
+    network_mode: service:web
+    depends_on:
+      web:
+        condition: service_started
+      node_runtime:
+        condition: service_completed_successfully
+    volumes:
+      - .:/app
+      - python_env:/opt/hermes-venv
+      - node_modules:/app/node_modules
+      - node_runtime:/opt/node-runtime:ro
+      - hermes_data:/data/hermes
+    env_file:
+      - /run/base44/app.env
+    environment:
+      HERMES_HOME: /data/hermes
+      PATH: /opt/node-runtime/bin:/opt/hermes-venv/runtime/bin:/usr/local/bin:/usr/bin:/bin
+      PYTHONUNBUFFERED: "1"
+    command: >-
+      sh -c 'set -e;
+      if [ ! -x /opt/hermes-venv/runtime/bin/python ]; then python -m pm.build_env --source . --out /opt/hermes-venv/runtime --extra web; fi;
+      exec /opt/hermes-venv/runtime/bin/python -m watchfiles --filter python
+      "/opt/hermes-venv/runtime/bin/python -m hermes_cli.main serve --host 127.0.0.1 --port 9119 --no-open" /app'
+    healthcheck:
+      test: ["CMD", "/opt/hermes-venv/runtime/bin/python", "-c", "import urllib.request; r=urllib.request.urlopen('http://127.0.0.1:9119/api/status', timeout=3); assert r.status == 200"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 240s
+    restart: on-failure
+
+volumes:
+  node_modules:
+  node_runtime:
+  python_env:
+  hermes_data:

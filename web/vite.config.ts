@@ -160,7 +160,15 @@ export default defineConfig({
     proxy: {
       "/api": {
         target: BACKEND,
+        changeOrigin: true,
         ws: true,
+        configure(proxy) {
+          // The dashboard listens only on loopback and checks both the WS Host
+          // and Origin. Vite is its trusted local reverse proxy in development.
+          proxy.on("proxyReqWs", (request) => {
+            request.setHeader("Origin", BACKEND);
+          });
+        },
       },
       // Same host as `hermes dashboard` must serve these; Vite has no
       // dashboard-plugins/* files, so without this, plugin scripts 404
